@@ -1,0 +1,30 @@
+---
+title: "DATA 607 Week 2 Assignment"
+author: "Dan Smilowitz"
+date: "February 7, 2016"
+output: html_document
+---
+
+#### Loading Data
+To prepare for loading the data, column names are specified based on the 'Attribute Information' section at https://archive.ics.uci.edu/ml/datasets/Mushroom:
+```{r col-names}
+bridge_fields <- c('IDENTIF', 'RIVER', 'LOCATION', 'ERECTED', 'PURPOSE', 'LENGTH', 'LANES', 'CLEAR-G', 'T-OR-D', 'MATERIAL', 'SPAN', 'REL-L', 'TYPE')
+```
+  
+The data is then read in from https://archive.ics.uci.edu/ml/machine-learning-databases/bridges/bridges.data.version2:
+```{r read-data}
+pgh_bridges <- read.table('https://archive.ics.uci.edu/ml/machine-learning-databases/bridges/bridges.data.version2', header=FALSE, sep=",", col.names = bridge_fields)
+```
+  
+  
+#### Creating subset  
+A new `data.frame` is then constructed with 5 colums from `mushroom`:
+```{r subset}
+my_bridges <- pgh_bridges[ , c('RIVER', 'TYPE', 'MATERIAL', 'LANES', 'SPAN')]
+```
+
+#### Results
+The resulting `data.frame`:
+```{r results}
+head(my_bridges)
+```
