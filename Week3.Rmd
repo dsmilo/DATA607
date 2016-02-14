@@ -1,0 +1,51 @@
+---
+title: "DATA 607 Week 3 Assignment"
+author: "Dan Smilowitz"
+date: "February 14, 2016"
+output: html_document
+---
+
+###Reading the Data
+First the population data is read in:
+```{r read-pop}
+pop <- read.csv('./population.csv')
+```
+Then the tuberculosis data is read in, using the column names from the `tb.sql` file:
+```{r read-tb}
+tb <- read.csv('./tb.csv', header = FALSE, col.names = c('country', 'year', 'sex', 'child', 'adult', 'elderly'))
+```
+
+###Modifying the Data
+Values of -1 in the `child`, `adult`, and `eldery` columns are converted to `NA`:
+```{r replace-NA}
+tb$child   <- ifelse(tb$child   == -1, NA, tb$child)
+tb$adult   <- ifelse(tb$adult   == -1, NA, tb$adult)
+tb$elderly <- ifelse(tb$elderly == -1, NA, tb$elderly)
+```
+
+The columns of `tb` are then summed to give the total number of tuberculosis cases:
+```{r tb-cases}
+tb$cases <- tb$child + tb$adult + tb$elderly
+```
+
+###Linking the Data
+The `dpylr` package is used to join the `population` and `tb` datasets:
+```{r pop-tb, message=FALSE}
+require(dplyr)
+pop_tb <- inner_join(pop, tb, by = c("country" = "country", "year" = "year"))
+```
+
+###Calculating the Infection Rate
+The number of cases is then summed across genders and the infection rate is calculated, as cases per 1,000,000 residents:
+```{r aggregate-data}
+by_country_year <- group_by(pop_tb, country, year, population)
+infection_rate <- summarize(by_country_year, cases=sum(cases))
+infection_rate$rate <- infection_rate$cases/infection_rate$population * 1000000
+infection_rate <- as.data.frame(infection_rate[, c(1, 2, 5)])
+```
+
+###Results
+A sample of the resulting dataset:
+```{r results-table}
+infection_rate[seq(1, nrow(infection_rate), 100), ]
+```
