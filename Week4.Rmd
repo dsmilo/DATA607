@@ -1,0 +1,63 @@
+---
+title: "DATA 607 Week 4: Regular Expressions"
+author: "Dan Smilowitz"
+date: "February 21, 2016"
+output: html_document
+---
+
+###Problem 3
+```{r read-simpsons, message=FALSE, echo=FALSE}
+library(stringr)
+raw.data <- "555-1239Moe Szyslak(636) 555-0113Burns, C. Montgomery555-6542Rev. Timothy Lovejoy555 8904Ned Flanders636-555-3226Simpson,Homer5553642Dr. Julius Hibbert"
+(name <- unlist(str_extract_all(raw.data, "[[:alpha:]., ]{2,}")))
+```
+
+####Put first names first
+
+```{r first-last}
+# separate last_name, first_name by comma
+last_first <- str_split(name, ",")
+# reorder to first_name last_name
+for (i in 1:length(name)) {
+  name[i] <- paste(str_trim(rev(last_first[[i]])), collapse = " ")
+}
+name
+```
+
+####Find titles
+The titles given end with periods.  However, there is a first name with a period as well, so length will have to be considered.  Titles have 2 or 3 letters before the period.  Using these criteria, a regular expression can be created:
+
+```{r title}
+(has_title <- str_detect(name, "[:alpha:]{2,}\\."))
+```
+
+
+####Find second names
+Characters with second names will have an extra space in their full name.  Taking into account that titles also add a space:
+```{r second-name}
+(second_name <- str_count(name, " ") > ifelse(has_title, 2, 1))
+```
+
+
+###Problem 7
+The tag, as written, returns the entire string:
+```{r html-tag-original}
+str_extract("<title>+++BREAKING NEWS+++</title>", "<.+>")
+```
+
+This can be corrected by adding a question mark to the expression to indicate that the goal is to find the shortest sequence of characters between html tags:
+```{r html-tag-corrected}
+str_extract("<title>+++BREAKING NEWS+++</title>", "<.+?>")
+```
+
+
+###Problem 8
+The tag, as written, returns only a dash:
+```{r binomial-string-original}
+str_extract("(5-3)^2=5^2-2*5*3+3^2 conforms to the binomial theorem", "[^0-9=+*()]+")
+```
+
+This fails because the caret needs to be designated as a literal character.  The literal dash also needs to be added (and the one in `0-9` needs to remain).
+
+```{r binomial-string-corrected}
+str_extract("(5-3)^2=5^2-2*5*3+3^2 conforms to the binomial theorem", "[\\^0-9=+*()\\-]+")
