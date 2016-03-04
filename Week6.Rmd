@@ -1,0 +1,74 @@
+---
+title: 'DATA 607 Week 6: Tidy Data'
+author: "Dan Smilowitz"
+date: "March 6, 2016"
+output: html_document
+---
+
+```{r load-packages, echo=FALSE, message=FALSE}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(knitr)
+```
+
+![](./airlines.png)
+
+The data contained in the table above are replicated in a [.csv file](https://raw.githubusercontent.com/dsmilo/DATA607/master/airlines.csv).
+
+###Reading the Data
+The data is read into a data frame, using the `check.names = FALSE` option to avoid inserting unnecessary periods in cities with spaces:
+```{r read-data}
+airlines <- read.table('./airlines.csv', sep = ",", check.names = FALSE, header = TRUE, stringsAsFactors = FALSE)
+```
+
+###Cleaning the Data
+The first two column names are filled in, and the blank entries in the airline column are filled in:
+```{r clean-csv}
+names(airlines) <- c('Airline', 'Status', names(airlines)[3:7])
+for (i in 1:nrow(airlines)) {
+  if (airlines[i, 1] == "") {
+    airlines[i, 1] = airlines[i - 1, 1]
+  }
+}
+```
+
+###Tidying the Data
+To tidy the data, the frequencies are gathered by destination using `tidyr`.  The blank row is filtered out using `dplyr`:
+```{r gather-destinations}
+airlines <- airlines %>%
+  gather(Destination, Frequency, -Airline, -Status) %>%
+  filter(Frequency != "")
+```
+
+Flight statuses are renamed for consistency, and then spread out in order to allow for analysis:
+```{r spread-status}
+airlines$Status[airlines$Status == "on time"] <- "OnTime"
+airlines$Status[airlines$Status == "delayed"] <- "Delayed"
+airlines <- airlines %>% 
+  spread(Status, Frequency)
+kable(airlines)
+```
+
+###Analyzing the Data
+In order to analyze the two airlines' performance, the `mutate` function is used to calculate the total number of flights and use that to calculate the percentage of flights that arrive on time:
+```{r on-time-percent}
+airlines <- airlines %>% 
+  mutate(
+    Total = Delayed + OnTime,
+    OnTimeRate = OnTime / Total) %>% 
+  select(-Delayed, -OnTime)
+kable(airlines)
+```
+
+The airlines' on-time performance at each of the five airports is visualized using `ggplot2`:
+```{r bar-plot, fig.retina=1, echo=FALSE, fig.width=9, fig.align='center'}
+ggplot(airlines, aes(x = Airline, y = OnTimeRate, fill = Airline)) + geom_bar(alpha = 0.5, stat = "identity") + facet_wrap(~ Destination, nrow = 1) + theme(legend.position = "bottom") + scale_x_discrete("", breaks = NULL) + scale_y_continuous("") + ggtitle("\n Airline On-Time Performance\n")
+```
+
+From this chart, it is clear that Alaska has better on-time performance at each of the five destinations.  To investigate if there is a relationship between on-time performance and volume of flights to a destination:
+```{r scatter-plot, fig.retina=1, echo=FALSE, fig.width=9, fig.align='center'}
+ggplot(airlines, aes(x = Total, y = OnTimeRate, col = Airline)) + geom_point(alpha = 0.5) + theme(legend.position = "bottom") + scale_x_continuous("") + scale_y_continuous("") + ggtitle("\n Airline On-Time Performance vs. Flight Volume\n")
+```
+
+From this plot, there does not seem to be much relationship between flight volume and on-time performance --- the overall correlation between the two variables is only `r round(cor(airlines$Total, airlines$OnTimeRate), 3)`.
