@@ -1,0 +1,195 @@
+---
+title: 'DATA 607 Project 2: Preparing Datasets'
+author: "Dan Smilowitz"
+date: "March 13, 2016"
+output: 
+  html_document: 
+    highlight: pygments
+    theme: flatly
+---
+
+```{r load-packages, echo=FALSE, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(stringr)
+library(ggplot2)
+```
+
+## Generator Capacity Prices (*Dan Smilowitz*)
+
+### Reading the Data
+
+The data is loaded from a [csv](https://raw.githubusercontent.com/dsmilo/DATA607/master/UCAP.csv).  The first two rows of the file have the headers -- they are read in, combined, and set as the names:
+
+```{r load-UCAP}
+UCAP         <- read.csv('./UCAP.csv', stringsAsFactors = FALSE, header = FALSE, skip = 2)
+UCAP_headers <- read.csv('./UCAP.csv', stringsAsFactors = FALSE, header = FALSE, nrows = 2)
+UCAP_names   <- c("Month_Year", rep("", length(UCAP_headers)-1))
+
+for (i in 2:length(UCAP_headers)) {
+  UCAP_names[i] = paste(UCAP_headers[1, i], UCAP_headers[2, i], sep = "-")
+}
+
+names(UCAP) <- UCAP_names
+```
+
+`r kable(head(UCAP), padding = 0)`
+
+### Tidying the Data
+The dataset is converted to a tiny format with each row representing an observation:
+```{r tidy-UCAP}
+UCAP <- UCAP %>% gather(Auction_Location, Price, 2:13)
+```
+
+`r kable(head(UCAP), padding = 0)`
+
+The first two columns contain two variables each, and the third column is stored as a string.  The variables are separated using regular expressions and the `stringr` package, and the prices are converted to values.
+
+```{r clean-UCAP, warning=FALSE}
+UCAP$Year     <- str_extract(UCAP$Month_Year, "[[:digit:]]{4}")
+UCAP$Month    <- str_extract(UCAP$Month_Year, "[[:alpha:]]+")
+UCAP$Auction  <- str_sub(UCAP$Auction_Location, 1, str_locate(UCAP$Auction_Location, "-")[, 1] - 1)
+UCAP$Location <- str_sub(UCAP$Auction_Location, str_locate(UCAP$Auction_Location, "-")[, 1] + 1)
+UCAP$Price    <- extract_numeric(UCAP$Price)
+
+UCAP          <- UCAP %>% select(Year, Month, Auction, Location, Price)
+```
+
+`r kable(head(UCAP), padding = 0)`
+
+### Analyzing the Data
+
+#### Which month of the year sees the highest prices in each location?
+The average price is calculated by location and month.  With the monthly means for each location sorted in descending order, returning every 12th row will return the highest value for each location:
+```{r month-UCAP}
+UCAP_month <- UCAP %>% 
+  group_by(Location, Month) %>%
+  summarize(Mean = mean(Price, na.rm = TRUE)) %>%
+  arrange(desc(Mean))
+
+UCAP_month[seq(1, nrow(UCAP_month), 12), 1:2]
+```
+
+#### What is the average difference between NYC and ROS prices?
+
+```{r diff-UCAP}
+UCAP_diff <- UCAP %>%
+  group_by(Location) %>%
+  filter(Location == "NYC" | Location == "ROS") %>%
+  summarize(Mean=mean(Price, na.rm = TRUE))
+
+UCAP_diff[1, 2] - UCAP_diff[2,2]
+```
+
+#### Which calendar year saw the highest average price across regions?
+```{r year-UCAP, message=FALSE}
+UCAP %>%
+  group_by(Year) %>%
+  summarize(Mean = mean(Price, na.rm = TRUE)) %>%
+  arrange(desc(Mean)) %>%
+  top_n(3)
+```
+
+#### Is the monthly auction or the spot auction more volatile?
+```{r volitlity-UCAP}
+UCAP %>%
+  group_by(Auction) %>%
+  filter(Auction == "Monthly" | Auction == "Spot") %>%
+  summarize(Variance = var(Price, na.rm = TRUE)) %>%
+  arrange(desc(Variance))
+```
+
+The spot auction is more volatile than the monthly auction, as it has a higher variance.
+
+
+## Untidy Auction Data (*Christopher Martin*)
+
+### Reading the Data
+
+The data is loaded from a [csv](https://raw.githubusercontent.com/dsmilo/DATA607/master/untidy_auction_data.csv).  
+```{r load-auction}
+auction <- read.csv('./untidy_auction_data.csv', stringsAsFactors = FALSE, header = TRUE)
+```
+
+`r kable(auction, padding = 0)`
+
+### Tidying the Data
+
+The item descriptions are not needed for this analysis -- they are stored in a separate table with the lot number to allow for `join` functions in `dplyr` if needed for further analysis.
+```{r clean-auction}
+lot_info <- auction %>% select(Lot, Description)
+auction  <- auction %>% select(Lot, Range, Price)
+```
+
+`r kable(auction, padding = 0)`
+
+The `auction` dataset is tidied, including the creation of two separate values for estimates (Low and High):
+```{r tidy-auction}
+auction$Low  <- str_trim(str_sub(auction$Range, 1, str_locate(auction$Range, "-")[, 1] - 1))
+auction$High <- str_trim(str_sub(auction$Range, str_locate(auction$Range, "-")[, 1] + 1))
+auction <- auction %>% select(Lot, Low, High, Price)
+
+auction <- auction %>% gather(Value, Price, -Lot) %>% arrange(Lot, Value)
+auction$Price <- extract_numeric(auction$Price)
+```
+
+`r kable(auction, padding = 0)`
+
+### Analyzing the Data
+
+#### What is the percent different between estimates and sale prices?
+
+The requested analysis asked for the *total* percent difference between estimates and sale prices.  Thus, the data are summarized across lot numbers before calculation.
+
+```{r percent-auction}
+auction <- auction %>% group_by(Value) %>% summarize(Sum = sum(Price))
+
+HighDiff <- round((auction[auction$Value == "High", 2] - auction[auction$Value == "Price", 2]) / 
+                    auction[auction$Value == "Price", 2], 4) * 100
+LowDiff <- round((auction[auction$Value == "Low", 2] - auction[auction$Value == "Price", 2]) / 
+                   auction[auction$Value == "Price", 2], 4) * 100
+```
+
+The stated problem suggested calculating the percent difference with the estimate as the denominator; however, using the sale price as the denominator is likely more accurate, as it compares to the *actual* value rather than the *predicted* value.
+
+The difference between the low estimates and sale prices is **`r LowDiff`%**, and the difference between high estimates and sale prices is **`r HighDiff`%**.  In both cases, the negative numbers indicate that the estimates underpredict the actual sale prices.
+
+## Distribution of Wealth (*Ken Markus*)
+
+### Reading the Data
+The data is loaded from a [csv](https://raw.githubusercontent.com/dsmilo/DATA607/master/wealth.csv).  The first row of the file contains the chart title, and the second row has column names with a number of spaces --- as a result, the first two rows will be skipped and the column names entered manually.
+```{r load-wealth}
+wealth <- read.csv('./wealth.csv', stringsAsFactors = FALSE, header = FALSE, skip = 2)
+names(wealth) <- c('Year', 'Top1', 'Next19', 'Bottom80')
+```
+
+`r kable(head(wealth), padding = 0)`
+
+### Tidying the Data
+Because of the percentage signs in the data, the values are read in as strings.  This is corrected, and the numbers are converted to decimal form.
+
+```{r percent-wealth}
+for (i in 2:4) {
+  wealth[, i] <- extract_numeric(wealth[, i]) / 100
+}
+```
+
+The data is then converted to a "long" data set to allow for easier analysis.
+
+```{r tidy-wealth}
+wealth <- wealth %>% gather(Tier, Share, -Year)
+```
+
+`r kable(head(wealth), padding = 0)`
+
+### Analyzing the Data
+
+#### How has the distribution of wealth changed over time?
+To analyze the change in distribution of wealth, the values for each group are plotted over time:
+
+```{r plot-wealth, echo=FALSE, fig.retina=1}
+ggplot(wealth, aes(x = Year, y = Share, col = Tier)) + geom_line(size = 1) + theme(legend.position = "bottom") + scale_y_continuous("Share of Total Wealth", labels = scales::percent) + ggtitle("Distribution of Wealth\n")
+```
+
+From this chart, it is clear that the share of total wealth of the "Next 19%" has increased, surpassing taht of the "Top 1%"" some time between 1998 and 2001.  The overall share of these two groups has increased, as the share of the "Bottom 80%" has decreased from almost 10% in 1983 to under 5% in 2010.
