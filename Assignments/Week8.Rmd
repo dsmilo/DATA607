@@ -15,9 +15,9 @@ library(jsonlite)
 
 For this assignment, files containing information about my favorite physics textbooks from my undergraduate study are read in from text files in three different formats:
 
-- [HTML](https://raw.githubusercontent.com/dsmilo/DATA607/master/books.html)
-- [XML](https://raw.githubusercontent.com/dsmilo/DATA607/master/books.xml)
-- [JSON](https://raw.githubusercontent.com/dsmilo/DATA607/master/books.json)
+- [HTML](https://raw.githubusercontent.com/dsmilo/DATA607/master/Assignments/books.html)
+- [XML](https://raw.githubusercontent.com/dsmilo/DATA607/master/Assignments/books.xml)
+- [JSON](https://raw.githubusercontent.com/dsmilo/DATA607/master/Assignments/books.json)
 
 The files are parsed, and the data stores in data frames. 
 
