@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<books>
+	<book id="1">
+		<title>An Introduction to Modern Astrophysics (2nd Edition)</title>
+		<authors first="Carroll, Bradley W." second = "Ostlie, Dale A."/>
+		<year>2006</year>
+		<pages>1400</pages>
+	</book>
+	<book id="2">
+		<title>Spacetime and Geometry: An Introduction to General Relativity</title>
+		<authors first="Carroll, Sean"/>
+		<year>2003</year>
+		<pages>513</pages>
+	</book>
+	<book id="3">
+		<title>Introduction to Electrodynamics (3rd Edition)</title>
+		<authors first="Griffiths, David J."/>
+		<year>1999</year>
+		<pages>576</pages>
+	</book>
+</books>

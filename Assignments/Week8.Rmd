@@ -1,0 +1,93 @@
+---
+title: "DATA 607 Week 8: XML and JSON"
+author: "Dan Smilowitz"
+date: "March 20, 2016"
+output: 
+  html_document: 
+    theme: flatly
+---
+
+```{r load-packages, message=FALSE, warning=FALSE, echo=FALSE}
+library(knitr)
+library(XML)
+library(jsonlite)
+```
+
+For this assignment, files containing information about my favorite physics textbooks from my undergraduate study are read in from text files in three different formats:
+
+- [HTML](https://raw.githubusercontent.com/dsmilo/DATA607/master/books.html)
+- [XML](https://raw.githubusercontent.com/dsmilo/DATA607/master/books.xml)
+- [JSON](https://raw.githubusercontent.com/dsmilo/DATA607/master/books.json)
+
+The files are parsed, and the data stores in data frames. 
+
+### HTML
+
+The HTML file is parsed and the tables extracted using the `XML` package.  The year and page columns are converted from text to integers.
+```{r html}
+my_html <- htmlParse("./books.html")
+books_html <- readHTMLTable(my_html, stringsAsFactors = FALSE)[[1]]
+books_html$year <- as.integer(books_html$year)
+books_html$pages <- as.integer(books_html$pages)
+```
+
+`r kable(books_html, padding = 0)`
+
+
+### XML
+
+The XML file is parsed, again using the `XML` package.  The title, year, and page columns are extracted using the XPATH language.
+```{r xml}
+my_xml <- xmlParse("./books.xml")
+title <- xpathSApply(my_xml, "//title", xmlValue)
+year <- as.integer(xpathSApply(my_xml, "//year", xmlValue))
+pages <- as.integer(xpathSApply(my_xml, "//pages", xmlValue))
+```
+
+Because the authors are stored as attribute values, they have to be handled differently.  The author attributes are extracted into a list using XPATH.  A loop is then used to match up first and second authors where both exist.
+```{r xml-authors}
+authors_list <- xpathSApply(my_xml, "//authors", xmlAttrs)
+authors <- rep('', length(authors_list))
+for(i in 1:length(authors_list)) {
+  authors[i] <- ifelse(length(authors_list[[i]]) == 1, authors_list[[i]][[1]],
+                       paste(authors_list[[i]][[1]], authors_list[[i]][[2]], sep = "; "))
+}
+```
+
+Finally, the data is stored in a data frame:
+```{r xml-df}
+books_xml <- data.frame(title, authors, year, pages, stringsAsFactors = FALSE)
+```
+
+`r kable(books_xml, padding = 0)`
+
+
+### JSON
+
+The JSON file is read in using the `jsonlite` package.  As the `fromJSON` command detects the native data type, it is not necessary to convert the year and pages columns from text.
+```{r json}
+my_json <- fromJSON("./books.json")
+books_json <- my_json[[1]]
+```
+
+`r kable(books_json, padding = 0)`
+
+
+### Analyzing the Data Frames
+
+The data frames created from the HTML and XML files are compared and found to be identical:
+```{r identical-xml}
+identical(books_html, books_xml)
+```
+
+The data frames created from the HTML and JSON files are then compared and found to be different:
+```{r identical-json}
+identical(books_html, books_json)
+```
+
+For thoroughness, the difference between these data frames is investigated.  Looking at the printed data frames above, it appears that there is a difference in the authors column for the first book (with two authors).  It is first verified that the two data frames are otherwise identical, and then the class of the two authors columns are compared.
+```{r identical-json-authors}
+identical(books_html[, -2], books_json[, -2])
+class(books_html$authors)
+class(books_json$authors)
+```

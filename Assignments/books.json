@@ -1,0 +1,20 @@
+{"books" :[
+	{
+	"title" : "An Introduction to Modern Astrophysics (2nd Edition)",
+	"authors" : ["Carroll, Bradley W.", "Ostlie, Dale A."],
+	"year" : 2006,
+	"pages" : 1400
+	},
+	{
+	"title" : "Spacetime and Geometry: An Introduction to General Relativity",
+	"authors" : ["Carroll, Sean"],
+	"year" : 2003,
+	"pages" : 513
+	},
+	{
+	"title" : "Introduction to Electrodynamics (3rd Edition)",
+	"authors" : ["Griffiths, David J."],
+	"year" : 1999,
+	"pages" : 576
+	}]
+}
