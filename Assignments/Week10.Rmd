@@ -1,0 +1,85 @@
+---
+title: "DATA 607 Week 10: Web APIs"
+author: "Dan Smilowitz"
+date: "April 3, 2016"
+output: 
+  html_document: 
+    theme: flatly
+---
+
+```{r setup, message=FALSE, include=FALSE}
+library(knitr)
+opts_chunk$set(comment=NA, message=FALSE, warning=FALSE)
+```
+
+### The Books API
+The New York Times' [Books API](http://developer.nytimes.com/docs/books_api/) provides a mechanism for retrieving bestsellers lists and book reviews.  For this exercise, the bestsellers lists are investigated.  A key for this API is obtained, but not displayed here for security.
+```{r api-key, include=FALSE}
+books_api_key <- '5f9b8634757755c01f5bb1f9a8a446b1:17:61325425'
+```
+
+
+### Investigating the API
+The standard format of a bestsellers list request takes the format
+`http://api.nytimes.com/svc/books/{version}/lists[.response_format]?{search-param1=value1}&[...]&[optional-param1=value1]&[...]&api-key={your-API-key}`
+
+#### Querying the API
+The current API version is v3.  Since the standard response format for this API is JSON, this format can be simplified and used to create a function to query the API.  The `jsonlite` package is used to read in the JSON response to the query:
+```{r api-function}
+library(jsonlite)
+books_request <- function(list_name, params = c(NA)){
+  books_query <- paste0('http://api.nytimes.com/svc/books/v3/lists/', list_name, '?api-key=', books_api_key)
+  if (length(na.exclude(params)) > 0){
+    books_query <- paste0(books_query, '&', paste(params, collapse = '&'))
+  }
+  fromJSON(books_query)
+}
+  
+```
+
+
+#### API Responses
+Requests to the API return a list, which contain the following:
+
+* The status, with "OK" indicating an HTTP response code of 200 (`status`)
+* A copyright message (`copyright`)
+* The number of results in the response (`num_results`)
+* The results (`results`)
+* Other information (e.g. corrections)
+
+For this exercise, only the results are of interest.
+
+
+### Retrieving Data
+Now that data can easily be requested and the responses understood, data is requested and stored in R.
+
+#### Bestsellers List Names
+The set of bestsellers list names can be obtained by querying the API for the list `names`.
+```{r bestsellers-lists}
+list_names <- books_request('names')$results
+```
+
+`r kable(head(list_names, 9))`
+
+The second item in this list, Combined Print & E-Book Fiction, will be used -- this list considers all fiction, regardless of format or sub-genre.
+
+#### Current Bestsellers List
+The current Combined Print and E-Book Fiction bestsellers list is obtained from the API using the encoded name:
+```{r bestsellers-response}
+books_response <- books_request('combined-print-and-e-book-fiction')$results
+str(books_response, max.level = 1)
+```
+
+In this response, `results` is formatted as a list containing information about the list itself in addition to the list itself.  Accordingly, the `books` item within the `results` list will need to be considered:
+```{r books-list}
+books_df <- books_response$books
+class(books_df)
+```
+
+The resulting data frame contains a large amount of information outside of the scope of this investigation.  The desired columns are selected with the `dplyr` package:
+```{r results}
+library(dplyr)
+books_df <- books_df %>% select(rank, rank_last_week, weeks_on_list, title, author, publisher, primary_isbn10)
+names(books_df) <- c("Rank", "Last", "Weeks", "Title", "Author", "Publisher", "ISBN10")
+```
+`r kable(books_df)`
