@@ -1,0 +1,126 @@
+---
+title: "DATA 607 Project 4: Database Migration"
+author: "Dan Smilowitz"
+date: "April 21, 2016"
+output: 
+  html_document: 
+    highlight: zenburn
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(warning=FALSE, message=FALSE, comment=NA)
+```
+
+
+
+### Motivation
+For this exercise, the flights database will be migrated from MySQL to MongoDB.
+
+The major advantages to MongoDB (or similar NoSQL databases) are as follows:
+
+* *Speed* -- faster queries of databse
+* *Flexibility* -- schema-less structure of NoSQL databases allows for flexibility in data storage
+* *Scalability* -- NoSQL databases can be scaled across multiple resources to allow for lower resource usage
+
+The major advantages to MySQL (or similar SQL databases are as follows):
+
+* *Linking* -- the JOIN functions in SQL databases provide a straighforward way to link entries in various tables
+* *Literacy* -- SQL databases have been used for a longer time than the relatively recent growth of NoSQL databases, so there is generally a greater level of comfort with SQL databases across organizations
+
+You should also briefly describe the advantages and disadvantages of storing the data in a relational database vs. your NoSQL database
+
+
+### Exporting the Database
+Using the `RMySQL` package, the flights database is connected to, and each of the 5 tables is read into R.
+```{r SQL-tables}
+library(RMySQL)
+flights_con <- dbConnect(drv = dbDriver("MySQL"), user = 'root', password = "password", host = 'localhost', dbname='flights')
+
+airlines_sql <- dbReadTable(flights_con, "airlines")
+airports_sql <- dbReadTable(flights_con, "airports")
+flights_sql  <- dbReadTable(flights_con, "flights")
+planes_sql   <- dbReadTable(flights_con, "planes")
+weather_sql  <- dbReadTable(flights_con, "weather")
+
+dbDisconnect(flights_con)
+```
+
+The stored data frames are saved as csv files to allow for migration.
+
+```{r save-tables, eval=FALSE}
+write.table(airlines_sql, file = "Data/airlines.csv", sep = ",", row.names = FALSE)
+write.table(airports_sql, file = "Data/airports.csv", sep = ",", row.names = FALSE)
+write.table(flights_sql, file = "Data/flights.csv", sep = ",", row.names = FALSE)
+write.table(planes_sql, file = "Data/planes.csv", sep = ",", row.names = FALSE)
+write.table(weather_sql, file = "Data/weather.csv", sep = ",", row.names = FALSE)
+```
+
+### Importing the Database
+With the tables from the flights database stored in csv files, the data is ready to be imported into MongoDB.  After setting up `mongod` as a windows service and adding C:\mongodb\bin\ to the Windows PATH variable, the following command is issued in the Windows command line terminal:
+```{import-airlines}
+mongoimport -db flights -collection airlines --type csv --file "path\Data\airlines.csv" --headerline
+```
+
+The above line of code and the agurments specified work as follows:
+
+* `-db flights` specifies that the data should be read into the flights database.  If this database does not already exist, it is automatically created.
+* `-collection airlines` specifices that the documents read in should be stored in the airlines collection.  Again, if this collection does not exist, it is automatically created.
+* `--type csv` specifies that a .csv file is being imported
+* `--file "path\Data\airlines.csv"` specifies where the desired file is located.  In this case, `path` represents the location of the Data folder used for the export above.
+* `--headerline` indicates that the headers for the collection are stored in the first row of the csv file
+
+The process above is repreated for the remaining csv files
+```{import-others}
+mongoimport -db flights -collection airports --type csv --file "path\Data\airports.csv" --headerline
+mongoimport -db flights -collection flights --type csv --file "path\Data\flights.csv" --headerline
+mongoimport -db flights -collection planes --type csv --file "path\Data\planes.csv" --headerline
+mongoimport -db flights -collection weather --type csv --file "path\Data\weather.csv" --headerline
+```
+
+Each of the tables from the flights SQL database has now been stored as a collection in MongoDB.
+
+### Querying the New Database
+To verify that the database was successfully migrated to MongoDB, the `rmongodb` package is utilized.
+```{r mongo-connect}
+library(rmongodb)
+mongo <- mongo.create()
+mongo.is.connected(mongo)
+mongo.get.databases(mongo)
+```
+
+To validate the migration of all records in MySQL to documents in MongoDB, the MongoDB database is queried, and the resulting objects stored in R.  The MongoDB connection is then destroyed.
+```{r mongo-query}
+airlines_mongo <- mongo.cursor.to.data.frame(mongo.find(mongo, "flights.airlines", '{}'), stringsAsFactors = FALSE)
+airports_mongo <- mongo.cursor.to.data.frame(mongo.find(mongo, "flights.airports", '{}'), stringsAsFactors = FALSE)
+flights_mongo  <- mongo.cursor.to.data.frame(mongo.find(mongo, "flights.flights", '{}'), stringsAsFactors = FALSE)
+planes_mongo   <- mongo.cursor.to.data.frame(mongo.find(mongo, "flights.planes", '{}'), stringsAsFactors = FALSE)
+weather_mongo  <- mongo.cursor.to.data.frame(mongo.find(mongo, "flights.weather", '{}'), stringsAsFactors = FALSE)
+mongo.destroy(mongo)
+```
+
+#### Comparing Results
+The collections returned from MongoDB can be confirmed to contain the same number of documents as there are records in the SQL database:
+```{r match-counts}
+dim(airlines_mongo) == dim(airlines_sql)
+dim(airports_mongo) == dim(airports_sql)
+dim(flights_mongo) == dim(flights_sql)
+dim(planes_mongo) == dim(planes_sql)
+dim(weather_mongo) == dim(weather_sql)
+```
+
+There are, however, some structural differences between the data returned to R.  While the native data is the same, the way the R packages interpre the data differs.  For completeness, the `airlines` data frames are modified to enforce uniformity.
+
+The data frame returned from MongoDB is not sorted in the same manner as that returned from the SQL database.  Additionally, the `airlines_sql` data frame has an extra `\r` character at the end of each airline name.  To allow for comparison, these items are corrected.
+```{r identical_airlines}
+library(dplyr)
+library(stringr)
+
+airlines_mongo    <- airlines_mongo %>% arrange(carrier)
+airlines_sql$name <- str_replace_all(airlines_sql$name, "\r", "")
+
+identical(airlines_mongo, airlines_sql)
+```
+
+If consistency across all R data frames is desired, further cleansing can be completed for the remaining tables/collections.
