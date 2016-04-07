@@ -1,0 +1,104 @@
+---
+title: 'DATA 607 Week 11: Document Classification'
+author: "Dan Smilowitz"
+date: "April 11, 2016"
+output: 
+  html_document: 
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(warning=FALSE, message=FALSE, comment=NA)
+```
+
+
+### Documents for Classification
+Apache SpamAssassin provides example [datasets](https://spamassassin.apache.org/publiccorpus/) to allow for the filtering of "spam" messages from non-spam ("ham") messages.  As outlined on the site's [readme](https://spamassassin.apache.org/publiccorpus/readme.html), there are five datasets available -- two spam datasets and three ham datasets.
+
+For this exercise, the largest spam and ham datasets (spam_2 and easy_ham) are used to train the models that are developed.  The next two largest datasets (spam and easy_ham_2) are used for testing the accuracy of the models.
+
+
+### Reading in the Documents
+The four files are downloaded and decompressed into individual folders.  For each folder, each document is read into R, a corpus is created, and the individual corpus is joined with the total larger `email_corpus`.
+```{r create-corpus}
+library(tm)
+library(stringr)
+
+email_corpus <- Corpus(VectorSource(NA))
+
+folders <- c("easy_ham/", "spam_2/", "easy_ham_2/", "spam/")
+
+for(n in 1:4){
+  folder <- str_c("Data/SpamHam/", folders[n])
+  for(i in 1:length(list.files(folder))){
+    email <- list.files(folder)[i]
+    tmp <- readLines(str_c(folder, email))
+    tmp <- str_c(tmp, collapse = "")
+    tmp_corpus <- Corpus(VectorSource(tmp))
+    email_corpus <- c(email_corpus, tmp_corpus)
+  }
+}
+```
+
+
+### Creating a Document-Term Matrix
+A document-term matrix is then created.  Arguments are included in the control option; these are self-explanatory.  Terms appearing in fewer than 10% of messages are removed from the document-term matrix.
+```{r create-dtm}
+dtm_email <- DocumentTermMatrix(email_corpus,
+                                control = list(removePunctuation = TRUE,
+                                               removeNumbers = TRUE,
+                                               tolower = TRUE,
+                                               stripWhitespace = TRUE))
+
+dtm_email <- removeSparseTerms(dtm_email, 0.90)
+```
+
+
+### Testing the Documents
+In order to predict the type of email for the testing set, the classification of "ham"" or "spam" must be set for each document.  Since the files are grouped by folder, this is simply a manner of repeating the appropriate term for each item in each folder.
+```{r set-labels}
+spam_labels <- c(rep("ham", length(list.files("Data/SpamHam/easy_ham/"))),
+                 rep("spam", length(list.files("Data/SpamHam/spam_2/"))),
+                 rep("ham", length(list.files("Data/SpamHam/easy_ham_2/"))),
+                 rep("spam", length(list.files("Data/SpamHam/spam/"))))
+```
+
+With the labels set, a container is created, with the training size being the combined number of files in the "easy_ham" and "spam_2" folders, and the testing size being the combined number of files in the "easy_ham_2" and "spam" folders.
+```{r create-container}
+library(RTextTools)
+m <- length(list.files("Data/SpamHam/easy_ham/")) + length(list.files("Data/SpamHam/spam_2/"))
+n <- length(spam_labels)
+
+email_container <- create_container(dtm_email, labels = spam_labels, trainSize = 1:m, testSize = (m + 1):n, virgin = FALSE)
+```
+
+With the container created, a training model is created for the three supervised techniques covered in the text.  Each model is then used to test the remaining documents.
+```{r run-models}
+email_models <- train_models(email_container, algorithms = c("SVM", "TREE", "MAXENT"))
+models_out   <- classify_models(email_container, email_models)
+```
+
+
+### Testing Results
+The labels created by the three models are converted to characters and compared with the correct labels
+```{r prepare-results}
+email_labels <- data.frame(spam_labels[(m + 1):n],
+                           as.character(models_out$SVM_LABEL),
+                           as.character(models_out$TREE_LABEL),
+                           as.character(models_out$MAXENTROPY_LABEL),
+                           stringsAsFactors = FALSE)
+```
+
+A data frame is created comparing the modeled labels against the actual labels.  The proportions of each model are then compared
+```{r results}
+results <- data.frame(SVM    = email_labels[, 2] == email_labels[, 1],
+                      TREE   = email_labels[, 3] == email_labels[, 1],
+                      MAXENT = email_labels[, 4] == email_labels[, 1])
+
+prop.table(table(results$SVM))
+prop.table(table(results$TREE))
+prop.table(table(results$MAXENT))
+```
+
+From these tables, it is apparent that the support vector machine (SVM) model produces the best results.  However, the 55% success rate that it yields is barely better than chance.
