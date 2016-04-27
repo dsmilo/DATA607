@@ -16,7 +16,7 @@ The text file is read in using the `read.table` function, with the `|` character
 
 ```{r read-data}
 chess_fields <- c("Number", "Name", "Points", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "EOL")
-tournament <- read.table("./tournamentinfo.txt", header = FALSE, skip = 4, sep = "|", fill = TRUE, stringsAsFactors = FALSE, col.names = chess_fields)
+tournament <- read.table("Data/tournamentinfo.txt", header = FALSE, skip = 4, sep = "|", fill = TRUE, stringsAsFactors = FALSE, col.names = chess_fields)
 ```
 
 The resulting data frame contains rows used to separate between entries in the original text file.  These rows are comprised of only hyphens in the `Number` column, with all other columns populated with blank strings.  These rows, as well as the extra `EOL` column, are removed:
@@ -91,7 +91,7 @@ The relevant columns are saved to a new data frame, and this data frame is expor
 ```{r save-results}
 ratings <- subset(tournament, TRUE, c(Name, State, Points, Player, Opponent))
 row.names(ratings) <- 1:64
-write.table(ratings, file = "chessratings.csv", sep = ",")
+write.table(ratings, file = "Data/chessratings.csv", sep = ",", row.names = FALSE)
 ```
 
 A sample of the final data set:

@@ -23,8 +23,8 @@ library(ggplot2)
 The data is loaded from a [csv](https://raw.githubusercontent.com/dsmilo/DATA607/master/UCAP.csv).  The first two rows of the file have the headers -- they are read in, combined, and set as the names:
 
 ```{r load-UCAP}
-UCAP         <- read.csv('./UCAP.csv', stringsAsFactors = FALSE, header = FALSE, skip = 2)
-UCAP_headers <- read.csv('./UCAP.csv', stringsAsFactors = FALSE, header = FALSE, nrows = 2)
+UCAP         <- read.csv('Data/UCAP.csv', stringsAsFactors = FALSE, header = FALSE, skip = 2)
+UCAP_headers <- read.csv('Data/UCAP.csv', stringsAsFactors = FALSE, header = FALSE, nrows = 2)
 UCAP_names   <- c("Month_Year", rep("", length(UCAP_headers)-1))
 
 for (i in 2:length(UCAP_headers)) {
@@ -109,7 +109,7 @@ The spot auction is more volatile than the monthly auction, as it has a higher v
 
 The data is loaded from a [csv](https://raw.githubusercontent.com/dsmilo/DATA607/master/untidy_auction_data.csv).  
 ```{r load-auction}
-auction <- read.csv('./untidy_auction_data.csv', stringsAsFactors = FALSE, header = TRUE)
+auction <- read.csv('Data/untidy_auction_data.csv', stringsAsFactors = FALSE, header = TRUE)
 ```
 
 `r kable(auction, padding = 0)`
@@ -160,7 +160,7 @@ The difference between the low estimates and sale prices is **`r LowDiff`%**, an
 ### Reading the Data
 The data is loaded from a [csv](https://raw.githubusercontent.com/dsmilo/DATA607/master/wealth.csv).  The first row of the file contains the chart title, and the second row has column names with a number of spaces --- as a result, the first two rows will be skipped and the column names entered manually.
 ```{r load-wealth}
-wealth <- read.csv('./wealth.csv', stringsAsFactors = FALSE, header = FALSE, skip = 2)
+wealth <- read.csv('Data/wealth.csv', stringsAsFactors = FALSE, header = FALSE, skip = 2)
 names(wealth) <- c('Year', 'Top1', 'Next19', 'Bottom80')
 ```
 
