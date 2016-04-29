@@ -1,0 +1,254 @@
+---
+title: 'DATA 607 Project: Volcanic Risk'
+author: "Dan Smilowitz"
+date: "April 28, 2016"
+output: 
+  ioslides_presentation: 
+    fig_retina: null
+    highlight: tango
+    widescreen: yes
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(fig.path='figure/manual-', cache.path='cache/manual-', fig.align='center', fig.show='hold', par=TRUE, warning=FALSE, message=FALSE, comment=NA, fig.retina=1, eval=FALSE, echo=TRUE)
+
+# to speed knitting, processed data is downloaded from github and loaded into memory
+download.file('https://github.com/dsmilo/DATA607/raw/master/Projects/Data/FinalProjectData.RData', 'FinalProjectData.RData', quiet = TRUE)
+load('FinalProjectData.RData')
+file.remove('FinalProjectData.RData')
+```
+
+## Problem
+
+*__Why would someone live near a volcano?__*
+
+Identify investigate the risk posed by volcanoes on nearby cities
+
+Data Utilized:
+
+- List of volcanoes (Smithsonian)
+- List of cities (GeoNames)
+    - Country data
+- Nearby places API (GeoNames)
+
+
+## Data Management
+
+Data stored in MySQL database
+
+  - `volcanoes`
+  
+  - `cities`
+  
+  - `countries`
+  
+  - `near`: instances of cities located near volcanoes
+
+
+## Data Acquisition
+```{r}
+GVP <- read.csv('https://github.com/dsmilo/DATA607/raw/master/Projects/Data/
+                GVP_Volcano_List.csv', stringsAsFactors = FALSE)[1:10]
+
+cities1000 <- read.table('https://raw.githubusercontent.com/dsmilo/DATA607/master/
+                         Projects/Data/cities1000.txt', header = FALSE, sep = "\t",
+                         fill = TRUE, stringsAsFactors = FALSE, quote = "")
+
+countries <- read.table('http://download.geonames.org/export/dump/countryInfo.txt',
+                        header = TRUE, skip = 50, sep = "\t", fill = TRUE,
+                        stringsAsFactors = FALSE,quote = "", comment.char = "",
+                        check.names = FALSE)
+
+dbWriteTable(volcano_db, "volcanoes", GVP, append = TRUE, row.names = FALSE)
+dbWriteTable(volcano_db, "cities", cities1000, append = TRUE, row.names = FALSE)
+dbWriteTable(volcano_db, "countries", countries, append = TRUE, row.names = FALSE)
+```
+
+
+## Data Acquisition
+
+Function to query API:
+```{r}
+get.places <- function(lat, lng, maxRows = 10000, radius = 161) {
+  username <- getOption('geonamesUsername')
+  api_query <- paste0('http://api.geonames.org/findNearbyPlaceNameJSON?style=short&
+cities=cities1000&username=', username, '&lat=', lat, '&lng=', lng, '&maxRows=',
+maxRows, '&radius=', radius)
+  places <- fromJSON(api_query)$geonames
+  if (class(places) == "data.frame"){
+    places <- places %>% select(geonameId, distance)
+  }
+  else{places <- list(NULL)}
+  places
+}
+```
+
+
+## Data Acquisition
+
+Loop to identify instances:
+```{r}
+for (i in 1:nrow(GVP)) {
+  nearby <- data.frame(NULL)
+  
+  nearby <- get.places(GVP$latitude[i], GVP$longitude[i])
+  
+  if(class(nearby) == "list") next
+  
+  nearby$near_id <- c(seq(near_count + 1, near_count + nrow(nearby), 1))
+  nearby$volc_id <- rep(GVP$volc_id[i], nrow(nearby))
+  nearby <- nearby %>% select(near_id, geonameId, volc_id, distance)
+  
+  dbWriteTable(volcano_db, "near", nearby, append = TRUE, row.names = FALSE)
+  
+  near_count <- near_count + nrow(nearby)
+}
+```
+
+
+## Processing Results
+
+Querying Database
+```{r}
+near_query <- dbSendQuery(volcano_db,
+                          'SELECT c.asciiname, co.Country, c.latitude, c.longitude,
+                          c.population, v.eruption, n.distance
+                          FROM near AS n
+                          INNER JOIN cities AS c
+                          ON c.geonameId = n.geonameId
+                          INNER JOIN countries AS co
+                          ON c.country_code = co.country_code
+                          INNER JOIN volcanoes AS v
+                          ON n.volc_id = v.volc_id;')
+
+at_risk <- dbFetch(near_query, n = -1)
+
+at_risk$distance <- as.numeric(at_risk$distance) * 0.621371
+at_risk$eruption <- 2016 - at_risk$eruption
+```
+
+
+## Quantifying Risk
+
+$$risk = \frac{\log_{10} (population)}{\log_{10} (eruption) \times distance^2}$$
+
+```{r}
+at_risk <- at_risk %>%
+  mutate(risk = log10(population + 2) / log10(eruption + 2) / ((distance + 1)^2))
+
+city_risk <- at_risk %>% mutate(City = paste(asciiname, Country, sep = ", ")) %>%
+  group_by(City) %>% summarise(lat = mean(latitude), lng = mean(longitude),
+                               pop = mean(population), risk = sum(risk)) %>%
+  arrange(desc(risk))
+
+max_risk <- max(city_risk$risk)
+city_risk$risk <- city_risk$risk / max_risk * 1000
+```
+
+
+## Results
+
+```{r, eval=TRUE, echo=FALSE}
+summary(city_risk$risk)
+
+head(city_risk, 10)
+```
+
+
+## Results
+
+```{r shapefile-map-filtered, echo=FALSE, eval=TRUE, fig.height=6, fig.width=8.4}
+library(ggplot2)
+library(rgdal)
+
+theme_blank <- list(theme(panel.grid.minor = element_blank(),
+                         panel.grid.major = element_blank(),
+                         panel.background = element_blank(),
+                         plot.background = element_rect(fill="#e6e8ed"),
+                         panel.border = element_blank(),
+                         axis.line = element_blank(),
+                         axis.text.x = element_blank(),
+                         axis.text.y = element_blank(),
+                         axis.ticks = element_blank(),
+                         axis.title.x = element_blank(),
+                         axis.title.y = element_blank(),
+                         legend.position = 'none',
+                         plot.title = element_text(face = "bold")))
+
+borders_wintri <- spTransform(borders, CRS("+proj=wintri"))
+bbox_wintri <- spTransform(bbox, CRS("+proj=wintri"))
+wmap_wintri <- spTransform(wmap, CRS("+proj=wintri"))
+grat_wintri <- spTransform(grat, CRS("+proj=wintri"))
+
+GVP_plot <- project(cbind(GVP$longitude, GVP$latitude), proj="+proj=wintri")
+GVP_plot <- as.data.frame(GVP_plot)
+names(GVP_plot) <- c("lng", "lat")
+
+risk_plot <- project(cbind(city_risk$lng, city_risk$lat), proj = "+proj=wintri")
+risk_plot <- as.data.frame(risk_plot)
+names(risk_plot) <- c("lng", "lat")
+risk_plot$risk <- city_risk$risk
+risk_plot <- dplyr::filter(risk_plot, risk > 10)
+
+ggplot(bbox_wintri, aes(long, lat, group=group)) + 
+  geom_polygon(fill="skyblue") +
+  geom_polygon(data=borders_wintri, aes(long,lat, group=group, fill=hole)) + 
+  geom_path(data=borders_wintri, aes(long,lat, group=group, fill=hole), color="grey50", size=0.3) +
+  geom_point(data=GVP_plot, aes(lng, lat, group=NULL, fill=NULL), color="red", alpha=0.25, pch = 2) +
+  geom_point(data=risk_plot, aes(lng, lat, group=NULL, fill=NULL, size=risk), alpha=0.5) +
+  labs(title="Map of Volcanoes and Cities at Risk\n") + 
+  coord_equal(ratio=1) + 
+  theme_blank +
+  scale_fill_manual(values=c("chartreuse3", "skyblue"), guide="none") +
+  scale_size(range = c(0, 8))
+```
+
+
+## Findings
+- Most cities located face a very low level of risk
+
+- Cities in Central America, Indonesia, the Philippines, and Japan face higher risk
+
+
+```{r mean-by-country, eval=TRUE, echo=FALSE}
+library(dplyr)
+risk_countries <- c('Guatemala', 'Honduras', 'Nicaragua', 'Costa Rica', 'Panama', 'Indonesia', 'Philippines', 'Japan')
+
+country_mean <- data.frame(NULL, stringsAsFactors = FALSE)
+for (i in 1:length(risk_countries)) {
+  country_mean[i, 1] <- risk_countries[i]
+  country_mean[i, 2] <- round(city_risk %>% filter(grepl(risk_countries[i], City)) %>% summarise(median(risk)), 1)
+  country_mean[i, 3] <- round(city_risk %>% filter(grepl(risk_countries[i], City)) %>% summarise(mean(risk)), 1)
+}
+
+names(country_mean) <- c("Country", "Median", "Mean")
+country_mean <- arrange(country_mean, desc(Mean))
+
+kable(country_mean, padding = 0, align = c('l', 'c', 'c'))
+```
+
+
+## Challenges
+
+- NYT Geographic did not peform as expected
+
+- GeoNames API has transaction limits
+
+- GeoNames API returns list, not data frame, for empty results
+
+- `ggmap` plot difficult to evaluate
+
+- Standard `ggplot2` plot subject to distortion near poles
+
+
+## Caveats
+
+- Assumptions for quantification of risk should be investigated 
+    
+    - Number of cities and degree of risk may change
+    
+- Ratings not meant to serve as  predictor of future volcanic activity
+
+
+References and full report available on [RPubs](http://rpubs.com/dsmilo/DATA607-FinalProject)

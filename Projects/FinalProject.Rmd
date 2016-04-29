@@ -1,0 +1,584 @@
+---
+title: 'DATA 607 Final Project: Volcanic Risk'
+author: "Dan Smilowitz"
+date: "April 29, 2016"
+output: 
+  html_document: 
+    highlight: tango
+    theme: flatly
+    number_sections: yes
+---
+
+<!-- change heading font size to allow for section numbering -->
+<style type="text/css">
+  h1 { font-size: 34px; }
+  h2 { font-size: 28px; }
+  h3 { font-size: 22px; }
+  h4 { font-size: 18px; }
+</style>
+
+```{r setup, include=FALSE, cache=FALSE}
+# set options
+library(knitr)
+opts_chunk$set(fig.path='figure/manual-', cache.path='cache/manual-', fig.align='center', fig.show='hold', par=TRUE, warning=FALSE, message=FALSE, comment=NA, fig.retina=1, eval=FALSE)
+
+# tune details of base graphics (from IS606)
+knit_hooks$set(par=function(before, options, envir){
+if (before && options$fig.show!='none') par(mar=c(4,4,.2,.1),cex.lab=.95,cex.axis=.9,mgp=c(2,.7,0),tcl=-.3)
+})
+
+# to speed knitting, processed data is downloaded from github and loaded into memory
+download.file('https://github.com/dsmilo/DATA607/raw/master/Projects/Data/FinalProjectData.RData', 'FinalProjectData.RData', quiet = TRUE)
+load('FinalProjectData.RData')
+file.remove('FinalProjectData.RData')
+```
+
+# Introduction
+This projects seeks to investigate the risk posed by non-extinct volcanoes on nearby centers of population.  This idea for this project was sparked by a conversation with a friend who had recently visted a volcano in Hawaii -- the investiation seemed to provide an interesting way to identify disparate datasets on the internet, link them, analyze the linked data, and create a useful visualization of the analysis.
+
+
+# Data
+In order to identify cities facing a risk of volcanic activity, the following sets of data are utilized:
+
+* __Volcanoes:__ data about volcanoes' locations and eruptions
+
+* __Cities:__ data about cities' location and populations
+
+* __Countries:__ data about each country in the world
+
+
+## Data Management
+A MySQL schema with four tables is created to store the data.  The `near` table will be used to house instances of cities located near volcanoes; the other tables align with the datasets outlined in the section above.
+
+```{r mysql-setup}
+library(RMySQL)
+volcano_db = dbConnect(MySQL(), user='root', password='password', host='localhost')
+dbSendQuery(volcano_db, 'CREATE SCHEMA volcanoes;')
+dbSendQuery(volcano_db, 'USE volcanoes;')
+
+dbSendQuery(volcano_db,'CREATE TABLE volcanoes (
+            volc_id INT PRIMARY KEY,
+            name VARCHAR(50),
+            eruption INT,
+            latitude FLOAT,
+            longitude FLOAT;')
+
+dbSendQuery(volcano_db,'CREATE TABLE cities (
+            geonameId INT PRIMARY KEY,
+            asciiname VARCHAR(50),
+            country_code CHAR(2),
+            latitude FLOAT,
+            longitude FLOAT,
+            population INT);')
+
+dbSendQuery(volcano_db,'CREATE TABLE countries (
+            country_code CHAR(2) PRIMARY KEY,     
+            Country VARCHAR(50) NOT NULL);')
+
+dbSendQuery(volcano_db,'CREATE TABLE near (
+            near_id INT PRIMARY KEY,            
+            geonameId INT NOT NULL,
+            volc_id INT NOT NULL,
+            distance FLOAT NOT NULL,
+            FOREIGN KEY (geonameId) REFERENCES cities(geonameId),
+            FOREIGN KEY (volc_id) REFERENCES volcanoes(volc_id));')
+```
+
+
+## Volcano Data
+The Smithsonian Institute's [Global Volcanism Project](http://volcano.si.edu/) hosts the *Volcanoes of the World* database, which "describ[es] the physical characteristics of Holocene volcanoes and their eruptions."  This database is used to acquire volcano data.
+
+By performing a [search](http://volcano.si.edu/search_volcano.cfm) of the database with no parameters, an .xls file is downloaded containing all information for all volcanoes in the databse.  The downloaded file is converted to a [csv](https://github.com/dsmilo/DATA607/blob/master/Projects/Data/GVP.csv) file following some minor cleanup.  The first ten columns of this file is read into R.
+
+```{r GVP-read}
+GVP <- read.csv('https://github.com/dsmilo/DATA607/raw/master/Projects/Data/GVP_Volcano_List.csv', 
+                stringsAsFactors = FALSE)[1:10]
+```
+
+
+### Cleansing
+Observing the structure of the imported data, some cleansing is required.  The columns of the `GVP` data frame are first renamed to make the cleansing cleaner.
+
+Many volcano names included have names indicating a direct relationship to another volcano -- these names include phrases such as "Cone of", "Thermal of", "Synonym of", etc.  These entities are removed in order to leave only the unique volcanoes.
+
+Because the eruption years are stored as characters, they are converted to numbers.  For volcanoes with 'Unknown' last eruptions, the eruption date is set to -100000 to make them very ancient but allow for downstream analysis by eliminating `NA`s.
+
+Finally, non-ASCII characters are removed from the volcano names -- these characters create issues when passing to the MySQL database.
+```{r GVP-clean}
+library(dplyr)
+names(GVP) <- c("Number", "Name", "Type", "Eruption", names(GVP)[5:10])
+GVP <- GVP %>% filter(!grepl(" of ", Type))
+GVP$Eruption <- as.numeric(GVP$Eruption)
+GVP$Eruption <- ifelse(is.na(GVP$Eruption), -100000, GVP$Eruption)
+GVP$Name <- iconv(GVP$Name, to = "ASCII", sub = "")
+```
+
+
+### Storage
+The names of the `GVP` data frame are edited, relevant columns selected, and the results are written to the `volcanoes` table in the MySQL database.
+```{r GVP-write}
+library(stringr)
+names(GVP) <- str_to_lower(names(GVP))
+names(GVP)[1] <- "volc_id"
+GVP <- GVP %>% select(volc_id, name, eruption, latitude, longitude)
+
+dbWriteTable(volcano_db, "volcanoes", GVP, append = TRUE, row.names = FALSE)
+```
+
+
+## City Data
+GeoNames is a hosted database that "contains over 10 million geographical names and consists of over 9 million unique features whereof 2.8 million populated places."  Its [webservice](http://www.geonames.org/export/web-services.html) allows querying of the database following user registration.  This database is used to acquire city data.
+
+A list of cities with population of at least 1000 is available on the GeoNames website as a compressed file.  The [txt file](https://raw.githubusercontent.com/dsmilo/DATA607/master/Projects/Data/cities1000.txt) contained is extracted and read into R.
+```{r cities-read}
+cities1000 <- read.table('https://raw.githubusercontent.com/dsmilo/DATA607/master/Projects/Data/cities1000.txt',
+                         header = FALSE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE, quote = "")
+```
+
+Additionally, GeoNames hosts a [list](http://download.geonames.org/export/dump/countryInfo.txt) of country information.  This file is read in in order to give the full country names.
+```{r countries-read}
+countries <- read.table('http://download.geonames.org/export/dump/countryInfo.txt', header = TRUE,
+                        skip = 50, sep = "\t", fill = TRUE, stringsAsFactors = FALSE,
+                        quote = "", comment.char = "", check.names = FALSE)
+```
+
+
+### Cleansing
+Names are added to the `cities1000` columns, and numeric columns are converted to the appropriate types
+```{r cities-cleanse}
+names(cities1000) <- c("geonameId", "name", "asciiname", "alternatenames", "latitude", "longitude",
+                       "feature_class", "feature_code", "country_code", "cc2",
+                       "admin1_code", "admin2_code", "admin3_code", "admin4_code",
+                       "population", "elevation", "dem", "timezone", "modification_date")
+
+cities1000$geonameId <- as.integer(cities1000$geonameId)
+cities1000$latitude <- as.double(cities1000$latitude)
+cities1000$longitude <- as.double(cities1000$longitude)
+cities1000$population <- as.integer(cities1000$population)
+```
+
+The first column of `countries` is changed, as it is read in with a # symbol, which causes issues when attempting to access the column.
+
+The country code for Namibia is NA -- this causes an issue, as it is read in as `NA` rather than as the text "NA".
+```{r countries-cleanse}
+names(countries)[1] <- "country_code"
+countries[countries$Country == "Namibia", 1] <- "NA"
+```
+
+
+### Storage
+The relevant columns from the `cities1000` and `countries` data frames are selected and written to the `cities` and `countries` tables in the MySQL database.
+```{r cities-countries-write}
+cities1000 <- cities1000 %>% select(geonameId, asciiname, country_code, latitude, longitude, population)
+dbWriteTable(volcano_db, "cities", cities1000, append = TRUE, row.names = FALSE)
+
+countries <- countries %>% select(country_code, Country)
+dbWriteTable(volcano_db, "countries", countries, append = TRUE, row.names = FALSE)
+```
+
+
+
+
+# Analysis
+
+## Finding Cities Near Volcanoes
+With the datasets populated in MySQL tables, the identification of cities near volcanoes is completed.  In order to identify these cities, the GeoNames [findNearbyPlaceName](http://www.geonames.org/export/web-services.html#findNearbyPlaceName) API is utilized.  This API returns information about places close to a location of interest.  In addition to the required username, latitude, and longitude parameters, the API takes the following optional parameters:
+
+* lat: the latitude of interest
+
+* lng: the longitude of interest
+
+* maxRows: the maximum number of rows to return
+
+* radius: the radius (in km) within which to return populated places
+
+* style: the verbosity of the response (one of short, medium, long)
+
+* cities: the list of cities (cities1000, cities5000, cities15000) to restrict the search
+
+To access the API, a wrapper is created to retrieve the information in JSON format.  The `geonames` element of the response contains a dataframe with the relevant responses -- this is stored in the `places` data frame.  For locations with no cities within the given radius, an empty list is returned; this empty list is passed through the function to avoid errors and to allow for filtering by class in downstream analysis.  For data frames returning results, the three columns of interest are returned.
+
+```{r get-places}
+library(jsonlite)
+get.places <- function(lat, lng, maxRows = 10000, radius = 161) {
+  username <- getOption('geonamesUsername')
+  api_query <- paste0('http://api.geonames.org/findNearbyPlaceNameJSON?style=short&cities=cities1000
+                      &username=', username, '&lat=', lat, '&lng=', lng, '&maxRows=', maxRows, '&radius=', radius)
+  places <- fromJSON(api_query)$geonames
+  if (class(places) == "data.frame"){
+    places <- places %>% select(geonameId, distance)
+  }
+  else{places <- list(NULL)}
+  places
+}
+```
+
+To identify cities that are near volcanoes, the location of each volcano in the `GVP` data frame is passed to the `get.places` function.  Two columns are added to the resulting data frame: the id of the volcano of interest and a unique identifier `near_id`.  The data frame, with columns rearranged, is written to the `near` table in the MySQL database.  The data frame is then cleared and the process repeated for the next volcano.
+
+```{r find-cities}
+near_count <- 0
+
+for (i in 1:nrow(GVP)) {
+  nearby <- data.frame(NULL)
+  
+  nearby <- get.places(GVP$latitude[i], GVP$longitude[i])
+  
+  if(class(nearby) == "list") next
+  
+  nearby$near_id <- c(seq(near_count + 1, near_count + nrow(nearby), 1))
+  nearby$volc_id <- rep(GVP$volc_id[i], nrow(nearby))
+  nearby <- nearby %>% select(near_id, geonameId, volc_id, distance)
+  
+  dbWriteTable(volcano_db, "near", nearby, append = TRUE, row.names = FALSE)
+  
+  near_count <- near_count + nrow(nearby)
+}
+```
+
+
+### Pulling All Results
+Once the loop has been run over all volcanoes, and the list of cities located near each volcano stored in the database, a query is executed to extract all instances of cities located near volcanoes, including information about both the city and the volcano.
+
+```{r mysql-query}
+near_query <- dbSendQuery(volcano_db,
+                          'SELECT c.asciiname, co.Country, c.latitude, c.longitude, c.population,
+                          v.eruption, n.distance
+                          FROM near AS n
+                          INNER JOIN cities AS c
+                          ON c.geonameId = n.geonameId
+                          INNER JOIN countries AS co
+                          ON c.country_code = co.country_code
+                          INNER JOIN volcanoes AS v
+                          ON n.volc_id = v.volc_id;')
+
+at_risk <- dbFetch(near_query, n = -1)
+dbClearResult(near_query)
+dbDisconnect(volcano_db)
+```
+
+The data is modified in order to allow for the quantification of risk.  Distances are converted to numbers and to miles from kilometers.  The eruption date is converted to years ago (from 2016).
+
+```{r at-risk-tidy}
+at_risk$distance <- as.numeric(at_risk$distance) * 0.621371
+at_risk$eruption <- 2016 - at_risk$eruption
+```
+
+
+## Quantifying Risk
+In order to determine the risk posed by each volcano on each city, three factors are considered:
+
+* Population of the city
+
+* Last eruption of the volcano
+
+* Distance between city and volcano
+
+It can reasonably be deduced that the potential impact of volcanic activity is affected by population based on order of magnitude rather than by the precise number of residents.  As such, the population is transformed using a logarithm.  Following similar reasoning, the time since last eruption is also log-transformed.  In both cases, base 10 is used, as it is more intuitive for determining order of magnitude.
+
+Ignoring any variations due to wind patterns, volcanic ash and debris will be distributed radially.  Because of this, the risk will scale inversely with the squared distance between city and volcano.  Using these assumptions, the following quantification of risk from volcanic activity is generated:
+
+$$risk = \frac{\log_{10} (population)}{\log_{10} (eruption) \times distance^2}$$
+
+The relationship between population and eruption in this equation means that the logarithm base does not matter, as long as they are the same.
+
+In order to avoid distortion from the above calculation using small numbers, slight adjustments are made to the variables:
+
+```{r calc-risk}
+at_risk <- at_risk %>%
+  mutate(risk = log10(population + 2) / log10(eruption + 2) / ((distance + 1)^2))
+```
+
+
+## Risk by City
+The cases in `at_risk` represent instances of an individual city and an individual volcano being located near one another.  In order to calculate the risk on a city-by-city basis, the risk in each city from each volcano is aggregated.  The individual values are added -- if the risk is based on a representation of probability, the probability of one volcano *or* another erupting is the sum of the two probabilities assuming the probabilities are independent.  To give the aggregated risk values a sense of scale, they are recalculated relative to the highest risk, which is assigned a value of 1000.
+
+```{r aggregate-risk}
+city_risk <- at_risk %>% mutate(City = paste(asciiname, Country, sep = ", ")) %>% group_by(City) %>%
+  summarise(lat = mean(latitude), lng = mean(longitude), pop = mean(population), risk = sum(risk)) %>%
+  arrange(desc(risk))
+
+max_risk <- max(city_risk$risk)
+city_risk$risk <- city_risk$risk / max_risk * 1000
+```
+
+
+# Results
+The `city_risk` data frame contains 33,599 rows, with each row representing a city with some level of risk from volanic activity
+
+```{r interactive-datatable, echo=FALSE, eval=TRUE}
+library(DT)
+datatable(city_risk, rownames = FALSE, colnames = c('City, Country', 'Latitude', 'Longitude', 'Population', 'Risk')) %>% formatRound(2:3, 2) %>% formatRound(4:5, 0)
+```
+
+The table above shows that of the top ten at-risk cities, six are located in Central America, three are in southeast Asia, and one is located in Iceland.  The most at-risk city, San Roque, Philippines, has a risk rating of 1000 (by design).  The remainder of the top 15 at-risk cities range between 558 and 808; all other cities have risk ratings under 550.  14,998 of the 33,599 cities have a rating between 0 and 1.
+
+## Distribution
+Summary statistics of the risk ratings are calculated:
+```{r summray-risk, eval=TRUE}
+summary(city_risk$risk)
+```
+
+The summary statistics suggest an extremely right-skewed distribution, as the mean (`r round(mean(city_risk$risk), 2)`) is greater than the median (`r round(median(city_risk$risk), 2)`), and even the third quartile(`r round(quantile(city_risk$risk, 0.75), 2)`) by a good deal -- this is in line with the observations made from the table above.
+
+To further investigate the distribution, a histogram is created using a bin width of 10.  Due to the large spread of risk ratings, a histogram for the log (base 10) of the risk is also created.
+
+```{r plot-dist-risk, echo=FALSE, eval=TRUE}
+library(ggplot2)
+
+ggplot(city_risk) + geom_histogram(aes(risk, 100*(..count..)/33599, fill = ..count..), breaks = seq(0, 1000, 10), closed = "right") + theme(legend.position = 'none', plot.title = element_text(face = "bold")) + scale_y_continuous("Frequency (%)") + scale_x_continuous("Risk") + scale_fill_gradient(low = "red", high = "green", guide = FALSE) + ggtitle("Distribution of City Risk Rating")
+
+ggplot(city_risk) + geom_histogram(aes(log10(risk), 100*(..count..)/33599, fill = ..count..), breaks = seq(-3, 3, 1), closed = "right") + theme(legend.position = 'none', plot.title = element_text(face = "bold")) + scale_y_continuous("Frequency (%)") + scale_x_continuous("log[Risk]", breaks = seq(-3, 3, 1)) + scale_fill_gradient(low = "red", high = "green", guide = FALSE) + ggtitle("Distribution of log[City Risk Rating]")
+```
+
+The first plot shows that over 85% of observations have a risk rating between 0 and 10.  This is further confirmed by the log graph.  The log graph also indicates that about 12% of risk ratings lie between 10 and 100, with just over 1% lying between 100 and 1000.  This is further verified with the following table:
+
+```{r table-risk, eval=TRUE}
+round(table(floor(log10(city_risk$risk)))/nrow(city_risk)*100, 3)
+```
+
+## Mapping
+A map of the world is obtained using `ggmap`, and volcanoes and identified cities are plotted, with the size of cities' points determined by the risk rating
+
+```{r ggmap, echo=FALSE, eval=TRUE}
+library(ggmap)
+myMap <- get_map(location=c(-180, -78, 180, 78), source="stamen", maptype="watercolor", crop=TRUE)
+ggmap(myMap) + 
+  geom_point(data = GVP, aes(x = longitude, y = latitude), pch = 2, col = "red", alpha = 0.25) + 
+  geom_point(data = city_risk, aes(x = lng, y = lat, size = risk), alpha = 0.5) +
+  theme(legend.position = 'none', plot.title = element_text(face = "bold")) +
+  ggtitle("Map of Volcanoes and Cities at Risk") +
+  scale_x_continuous('', breaks = NULL, labels = NULL) +
+  scale_y_continuous('', breaks = NULL, labels = NULL) +
+  scale_size(range = c(0, 8))
+```
+
+The plot produced does not reveal a great level of detail due to the complex background.  Due to issues with other map types and sources in `ggmap`, a map is instead created using polygons in `ggplot2`
+
+```{r polygon-map, echo=FALSE, eval=TRUE}
+water <- data.frame(x = c(-200, 200, 200, -200), y = c(-90, -90, 90, 90))
+
+ggplot() + geom_polygon(data = water, aes(x = x, y = y), fill = "skyblue") +
+  borders("world", colour="gray50", fill="chartreuse3", alpha = 0.75) + 
+  geom_point(data = GVP, aes(x = longitude, y = latitude), pch = 2, col = "red", alpha = 0.25) + 
+  geom_point(data = city_risk, aes(x = lng, y = lat, size = risk), alpha = 0.25) +
+  theme(legend.position = 'none', plot.title = element_text(face = "bold")) +
+  ggtitle("Map of Volcanoes and Cities at Risk") +
+  scale_x_continuous('', breaks = NULL, labels = NULL) +
+  scale_y_continuous('', breaks = NULL, labels = NULL) +
+  scale_size(range = c(0, 8))
+```
+
+This provides a more informative plot, however it still has issues.  There are a large number of volcanoes, and a decent number of cities, in high latitudes, where there is significant distortion at higher altitudes.  To attempt to lessen this, an example from [R Psychologist](http://rpsychologist.com/working-with-shapefiles-projections-and-world-maps-in-ggplot) utilizing transformed shapefiles from [Natural Earth](http://www.naturalearthdata.com/downloads/) with the `rgdal`, `raster`, and `ggplot2` packages is adapted to plot less-distorted maps.
+
+```{r shapefiles-get, echo=FALSE}
+library(raster)
+
+# list of shapefiles
+shape_files <- c("ne_110m_admin_0_countries.dbf",
+                 "ne_110m_admin_0_countries.prj",
+                 "ne_110m_admin_0_countries.shp",
+                 "ne_110m_admin_0_countries.shx",
+                 "ne_110m_graticules_15.dbf",
+                 "ne_110m_graticules_15.prj",
+                 "ne_110m_graticules_15.shp",
+                 "ne_110m_graticules_15.shx",
+                 "ne_110m_land.dbf",
+                 "ne_110m_land.prj",
+                 "ne_110m_land.shp",
+                 "ne_110m_land.shx",
+                 "ne_110m_wgs84_bounding_box.dbf",
+                 "ne_110m_wgs84_bounding_box.prj",
+                 "ne_110m_wgs84_bounding_box.shp",
+                 "ne_110m_wgs84_bounding_box.shx")
+
+# download shapefiles
+for (i in 1:length(shape_files)) {
+  download.file(paste0('https://github.com/dsmilo/DATA607/tree/master/Projects/Data/shapefiles/', shape_files[i]), shape_files[i], quiet = TRUE)
+}
+
+# read in shapefiles
+borders <- shapefile('shapefiles/ne_110m_admin_0_countries.shp')
+bbox <- shapefile('shapefiles/ne_110m_wgs84_bounding_box.shp')
+wmap <- shapefile('shapefiles/ne_110m_land.shp')
+grat <- shapefile('shapefiles/ne_110m_graticules_15.shp')
+
+# remove downloades shapefiles
+for (i in 1:length(shape_files)) {
+  file.remove(shape_files[i])
+}
+```
+
+```{r shapefile-map, echo=FALSE, eval=TRUE}
+library(rgdal)
+
+theme_blank <- list(theme(panel.grid.minor = element_blank(),
+                         panel.grid.major = element_blank(),
+                         panel.background = element_blank(),
+                         plot.background = element_rect(fill="#e6e8ed"),
+                         panel.border = element_blank(),
+                         axis.line = element_blank(),
+                         axis.text.x = element_blank(),
+                         axis.text.y = element_blank(),
+                         axis.ticks = element_blank(),
+                         axis.title.x = element_blank(),
+                         axis.title.y = element_blank(),
+                         legend.position = 'none',
+                         plot.title = element_text(face = "bold")))
+
+borders_wintri <- spTransform(borders, CRS("+proj=wintri"))
+bbox_wintri <- spTransform(bbox, CRS("+proj=wintri"))
+wmap_wintri <- spTransform(wmap, CRS("+proj=wintri"))
+grat_wintri <- spTransform(grat, CRS("+proj=wintri"))
+
+GVP_plot <- project(cbind(GVP$longitude, GVP$latitude), proj="+proj=wintri")
+GVP_plot <- as.data.frame(GVP_plot)
+names(GVP_plot) <- c("lng", "lat")
+
+risk_plot <- project(cbind(city_risk$lng, city_risk$lat), proj = "+proj=wintri")
+risk_plot <- as.data.frame(risk_plot)
+names(risk_plot) <- c("lng", "lat")
+risk_plot$risk <- city_risk$risk
+
+ggplot(bbox_wintri, aes(long, lat, group=group)) + 
+  geom_polygon(fill="skyblue") +
+  geom_polygon(data=borders_wintri, aes(long,lat, group=group, fill=hole)) + 
+  geom_path(data=borders_wintri, aes(long,lat, group=group, fill=hole), color="grey50", size=0.3) +
+  geom_point(data=GVP_plot, aes(lng, lat, group=NULL, fill=NULL), color="red", alpha=0.25, pch = 2) +
+  geom_point(data=risk_plot, aes(lng, lat, group=NULL, fill=NULL, size=risk), alpha=0.5) +
+  labs(title="Map of Volcanoes and Cities at Risk\n") + 
+  coord_equal(ratio=1) + 
+  theme_blank +
+  scale_fill_manual(values=c("chartreuse3", "skyblue"), guide="none") +
+  scale_size(range = c(0, 8))
+```
+
+This plot shows a significant concentration of at-risk cities in the following regions:
+
+* Pacific Coast of US
+
+* Central America
+
+* Southeast Asia
+
+* Japan
+
+* Mediterranean Sea
+
+
+As outlined [above](#Distribution), a significant poriton of the risk ratings are very low.  In order to better represent the cities that face significant risk, another plot is created illustrating only those cities with a risk rating over 10.
+
+```{r shapefile-map-filtered, echo=FALSE, eval=TRUE}
+library(rgdal)
+
+theme_blank <- list(theme(panel.grid.minor = element_blank(),
+                         panel.grid.major = element_blank(),
+                         panel.background = element_blank(),
+                         plot.background = element_rect(fill="#e6e8ed"),
+                         panel.border = element_blank(),
+                         axis.line = element_blank(),
+                         axis.text.x = element_blank(),
+                         axis.text.y = element_blank(),
+                         axis.ticks = element_blank(),
+                         axis.title.x = element_blank(),
+                         axis.title.y = element_blank(),
+                         legend.position = 'none',
+                         plot.title = element_text(face = "bold")))
+
+borders_wintri <- spTransform(borders, CRS("+proj=wintri"))
+bbox_wintri <- spTransform(bbox, CRS("+proj=wintri"))
+wmap_wintri <- spTransform(wmap, CRS("+proj=wintri"))
+grat_wintri <- spTransform(grat, CRS("+proj=wintri"))
+
+GVP_plot <- project(cbind(GVP$longitude, GVP$latitude), proj="+proj=wintri")
+GVP_plot <- as.data.frame(GVP_plot)
+names(GVP_plot) <- c("lng", "lat")
+
+risk_plot <- project(cbind(city_risk$lng, city_risk$lat), proj = "+proj=wintri")
+risk_plot <- as.data.frame(risk_plot)
+names(risk_plot) <- c("lng", "lat")
+risk_plot$risk <- city_risk$risk
+risk_plot <- dplyr::filter(risk_plot, risk > 10)
+
+ggplot(bbox_wintri, aes(long, lat, group=group)) + 
+  geom_polygon(fill="skyblue") +
+  geom_polygon(data=borders_wintri, aes(long,lat, group=group, fill=hole)) + 
+  geom_path(data=borders_wintri, aes(long,lat, group=group, fill=hole), color="grey50", size=0.3) +
+  geom_point(data=GVP_plot, aes(lng, lat, group=NULL, fill=NULL), color="red", alpha=0.25, pch = 2) +
+  geom_point(data=risk_plot, aes(lng, lat, group=NULL, fill=NULL, size=risk), alpha=0.5) +
+  labs(title="Map of Volcanoes and Cities at Risk\n") + 
+  coord_equal(ratio=1) + 
+  theme_blank +
+  scale_fill_manual(values=c("chartreuse3", "skyblue"), guide="none") +
+  scale_size(range = c(0, 8))
+```
+
+This plot shows a similar patterns as the non-thinned map above.  However, the number and severity of risk in cities on the Mediterranean Sea and the Pacific Coast of the US are far diminished.  With this thinned dataset, it can be observed that while there is a high concentration of volcanoes on the Pacific Coast of both North and South America, the number of cities facing significant risk is low.  It appears that the instances of at risk cities are most concentrated in Central America, Indonesia, the Philippines, and Japan.  The median and mean risk ratings for cities identified in each of these countries is identified:
+
+```{r mean-by-country, eval=TRUE, echo=FALSE}
+library(dplyr)
+risk_countries <- c('Guatemala', 'Honduras', 'Nicaragua', 'Costa Rica', 'Panama', 'Indonesia', 'Philippines', 'Japan')
+
+country_mean <- data.frame(NULL, stringsAsFactors = FALSE)
+for (i in 1:length(risk_countries)) {
+  country_mean[i, 1] <- risk_countries[i]
+  country_mean[i, 2] <- round(city_risk %>% filter(grepl(risk_countries[i], City)) %>% summarise(median(risk)), 1)
+  country_mean[i, 3] <- round(city_risk %>% filter(grepl(risk_countries[i], City)) %>% summarise(mean(risk)), 1)
+}
+
+names(country_mean) <- c("Country", "Median", "Mean")
+country_mean <- arrange(country_mean, desc(Mean))
+```
+
+`r kable(country_mean, padding = 0, align = c('l', 'c', 'c'))`
+
+From this table, it is clear that the median risk ratings for all countries in the identified set, aside from Panama, are higher than the median for the population at large.  Also, four of the countries (Nicaragua, Guatemala, Costa Rica, and Japan) have mean risk ratings higher than the population of identified cities.
+
+
+# Conclusion
+From the data gathered and the quantification of risk performed, it is observed that most cities located within 100 miles of a non-extinct volcano face a very low level of risk from volcanic activity.  Cities in Central America, Indonesia, the Philippines, and Japan, however, face more significant risk.
+
+In seeking to apply the findings of this investigation, the assumptions underlying the quantification of risk to cities should first be investigated -- if these assumptions (log relationship between population and last eruption, as well as inverse-squared with distance, to risk) are not valid, the number of cities and degree of risk may change.  Finally, it should be noted that the risk ratings attempt to quantify the risk faced by cities based on past eruption information -- they are not not meant to serve as an actual predictor of future volcanic activity.
+
+
+# References {-}
+Bivand, Roger et al (2016).
+*rgdal: Bindings for the Geospatial Data Abstraction Library. R package version 1.1-8.*
+https://CRAN.R-project.org/package=rgdal
+
+Hijmans, Robert J. (2015). 
+*raster: Geographic Data Analysis and Modeling. R package version 2.5-2.*
+https://CRAN.R-project.org/package=raster
+
+Kahle, David and Wickham, Hadley (2013).
+'ggmap: Spatial Visualization  with ggplot2.'
+*The R Journal, 5(1), 144-161.*
+http://journal.r-project.org/archive/2013-1/kahle-wickham.pdf
+
+Magnusson, Kristoffer (2013).
+'Working with shapefiles, projections and world maps in ggplot.'
+*R Psychologist.*
+http://rpsychologist.com/working-with-shapefiles-projections-and-world-maps-in-ggplot
+
+Ooms, Jeroen et al (2016).
+*RMySQL: Database Interface and 'MySQL' Driver for R. R package version 0.10.8.*
+https://CRAN.R-project.org/package=RMySQL
+
+Smithsonian Institution National Museum of Natural History (2016).
+*Global Volcanism Project.*
+http://volcano.si.edu/
+
+Wick, Marc (2016).
+*GeoNames.*
+http://www.geonames.org/
+
+Wickham, Hadley (2009).
+*ggplot2: Elegant Graphics for Data Analysis.*
+Springer-Verlag New York.
+
+Wickham, Hadley and Francois, Romain (2015).
+*dplyr: A Grammar of Data Manipulation. R package version 0.4.3.*
+https://CRAN.R-project.org/package=dplyr
+
+Xie, Yihui (2015).
+*DT: A Wrapper of the JavaScript Library 'DataTables'. R package version 0.1.*
+https://CRAN.R-project.org/package=DT
